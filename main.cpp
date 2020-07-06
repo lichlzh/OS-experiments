@@ -5,8 +5,8 @@
 #include<malloc.h>
 #include<algorithm>
 using namespace std;
-const int MAXN=32,opt_num=18,disk_size=100*1024*1024,block_size=1024,home_dir=0;
-const char options[][MAXN]={"login","logout","exit","refresh","register","logoff","info","create","dir","pwd","cd","delete","open","read","write","rename","chmod","copy"};
+const int MAXN=32,opt_num=19,disk_size=100*1024*1024,block_size=1024,home_dir=0;
+const char options[][MAXN]={"login","logout","exit","refresh","register","logoff","info","create","dir","pwd","cd","delete","open","read","write","rename","chmod","copy","tree"};
 unsigned char disk[disk_size];
 unsigned char *super_block_begin,*super_block_end,*user_block_begin,*user_block_end,*bitmap_block_begin,*bitmap_block_end,*inode_block_begin,*inode_block_end,*data_block_begin,*data_block_end;
 struct User{
@@ -327,11 +327,10 @@ bool judge_include(int from_id,int dst_id){
 	return false;
 }
 bool copy_all(int from_id,int dst_id){
-	printf("%d %d\n",from_id,dst_id);
 	Inode x,y,z;
 	read_from_disk(inode_block_begin+block_size*from_id+1,x);
 	read_from_disk(inode_block_begin+block_size*dst_id+1,y);
-	z=x,z.cnt=0,z.father=dst_id;
+	z=x,z.cnt=0,z.father=dst_id,z.owner_id=user_id;
 	int new_id=-1;
 	for(unsigned char* i=inode_block_begin;i<inode_block_end;i+=block_size){
 		bool has_inode;
@@ -348,6 +347,7 @@ bool copy_all(int from_id,int dst_id){
 	y.list[y.cnt++]=new_id;
 	write_to_disk(inode_block_begin+block_size*dst_id+1,y);
 	if(x.isfolder){
+		write_to_disk(inode_block_begin+block_size*new_id+1,z);
 		Inode w;
 		for(int i=0;i<x.cnt;i++){
 			read_from_disk(inode_block_begin+block_size*x.list[i]+1,w);
@@ -355,11 +355,10 @@ bool copy_all(int from_id,int dst_id){
 				printf("permission denied\n");
 				return false;
 			}
-			copy_all(z.list[i],y.list[y.cnt-1]);
-			z.cnt++;
+			copy_all(x.list[i],new_id);
 		}
 	}
-	else
+	else{
 		for(int i=0;i<x.cnt;i++){
 			int len=block_size;
 			if(i==x.cnt-1)
@@ -367,8 +366,20 @@ bool copy_all(int from_id,int dst_id){
 			z.list[i]=copy_data(x.list[i],len);
 			z.cnt++;
 		}
-	write_to_disk(inode_block_begin+block_size*new_id+1,z);
+		write_to_disk(inode_block_begin+block_size*new_id+1,z);
+	}
 	return true;
+}
+
+void tree(int id,int uid,int depth=0){
+	Inode x;
+	read_from_disk(inode_block_begin+id*block_size+1,x);
+	for(int i=0;i<depth;i++)
+		printf("-");
+	printf("%s\n",x.filename);
+	if(x.isfolder&&judge_authority(uid,x,5))
+		for(int i=0;i<x.cnt;i++)
+			tree(x.list[i],uid,depth+1);
 }
 
 void analyze_super_block(){
@@ -558,7 +569,7 @@ void process_option(int x){
 		free(user);
 	}
 	else if(x==6){//info
-		printf("Welcome to HoneyOS File System!\n");
+		printf("Welcome to File System!\n");
 		printf("disk structure:\n");
 		printf("super_block:  [%d,%d)\n",super_block_begin-disk,super_block_end-disk);
 		printf("user_block:   [%d,%d)\n",user_block_begin-disk,user_block_end-disk);
@@ -662,12 +673,6 @@ void process_option(int x){
 			printf("please login first\n");
 			return;
 		}
-		Inode x;
-		read_from_disk(inode_block_begin+cur_pos*block_size+1,x);
-		if(!judge_authority(user_id,x,7)){
-			printf("permission denied\n");
-			return;
-		}
 		static char arg[MAXN*MAXN];
 		scanf("%s",arg);
 		int dst_id=path_analyzer(cur_pos,arg);
@@ -694,7 +699,7 @@ void process_option(int x){
 			Inode x;
 			read_from_disk(inode_block_begin+dst_id*block_size+1,x);
 			if(x.isfolder)
-				printf("cannot open a directory");
+				printf("cannot open a directory\n");
 			else if(!open_file(x,user_id))
 				printf("permission denied\n");
 		}
@@ -723,12 +728,6 @@ void process_option(int x){
 			printf("please login first\n");
 			return;
 		}
-		Inode x;
-		read_from_disk(inode_block_begin+cur_pos*block_size+1,x);
-		if(!judge_authority(user_id,x,7)){
-			printf("permission denied\n");
-			return;
-		}
 		static char arg[MAXN*MAXN];
 		static unsigned char content[200*block_size+1];
 		scanf("%s",arg);
@@ -736,6 +735,7 @@ void process_option(int x){
 		if(dst_id==-1)
 			printf("no such file or directory\n");
 		else{
+			Inode x;
 			read_from_disk(inode_block_begin+dst_id*block_size+1,x);
 			if(x.isfolder)
 				printf("cannot write to a directory\n");
@@ -858,10 +858,13 @@ void process_option(int x){
 			}
 		}
 	}
+	else if(x==18){//tree
+		tree(cur_pos,user_id);
+	}
 }
 
 void work(){
-	printf("Please input options(login,logout,exit,refresh,register,logoff,info,create,dir,pwd,cd,delete,open,read,write,rename,chmod,copy)\n");
+	printf("Please input options(login,logout,exit,refresh,register,logoff,info,create,dir,pwd,cd,delete,open,read,write,rename,chmod,copy,tree)\n");
 	while(true){
 		static char opt[MAXN];
 		scanf("%s",opt);
